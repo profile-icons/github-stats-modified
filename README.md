@@ -158,8 +158,8 @@ and retrieve the images.
    following lines of code into your markdown content.
    - Replace `[USERNAME]` in the links below with your own username.
    ``` markdown
-   ![](https://github.com/profile-icons/git-stats-new/blob/generated/overview.svg) 
-   ![](https://github.com/profile-icons/git-stats-new/blob/generated/languages.svg)
+   ![](https://github.com/[USERNAME]/git-stats/blob/generated/overview.svg) 
+   ![](https://github.com/[USERNAME]/git-stats/blob/generated/languages.svg)
    [Created by `jstrieb/github-stats`.](https://github.com/jstrieb/github-stats)
    ```
 1. Star this repo if you like it!

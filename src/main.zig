@@ -250,11 +250,11 @@ pub fn main(init: std.process.Init) !void {
         language_colors: std.array_hash_map.String([]const u8),
         contributions: usize,
         name: []const u8,
-        languages_total: usize = 0,
+        languages_total: u64 = 0,
         stars: usize = 0,
         forks: usize = 0,
         lines_changed: usize = 0,
-        views: usize = 0,
+        clones: usize = 0,
         repos: usize = 0,
     } = .{
         .contributions = stats.repo_contributions +
@@ -277,12 +277,19 @@ pub fn main(init: std.process.Init) !void {
         aggregate_stats.stars += repository.stars;
         aggregate_stats.forks += repository.forks;
         aggregate_stats.lines_changed += repository.lines_changed;
-        aggregate_stats.views += repository.views;
+        aggregate_stats.clones += repository.clones;
         aggregate_stats.repos += 1;
         if (repository.languages) |langs| for (langs) |language| {
             if (glob.matchAny(exclude_langs orelse &.{}, language.name)) {
                 continue;
             }
+
+            // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+            const lang_lines_changed = @as(u64, language.lines_changed);
+            if (lang_lines_changed == 0) {
+                continue;
+            }
+
             if (language.color) |color| {
                 try aggregate_stats.language_colors.put(
                     allocator,
@@ -291,9 +298,11 @@ pub fn main(init: std.process.Init) !void {
                 );
             }
             var total = aggregate_stats.languages.get(language.name) orelse 0;
-            total += language.size;
+
+            // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+            total += lang_lines_changed;
             try aggregate_stats.languages.put(allocator, language.name, total);
-            aggregate_stats.languages_total += language.size;
+            aggregate_stats.languages_total += lang_lines_changed;
         };
     }
     aggregate_stats.languages.sort(struct {

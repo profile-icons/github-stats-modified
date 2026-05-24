@@ -20,7 +20,7 @@ const Repository = struct {
     forks: u32,
     languages: ?[]Language,
     lines_changed: u32,
-    views: u32,
+    clones: u32, // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
     private: bool,
 
     pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
@@ -99,11 +99,49 @@ const Repository = struct {
         }
         return response.status;
     }
+
+    // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+    fn getLangStatsByLineChange(self: *@This()) void {
+        if (self.languages == null) {
+            return;
+        }
+        const languages = self.languages.?;
+
+        var total_size: u64 = 0;
+        for (languages) |language| {
+            total_size += language.size;
+        }
+
+        if (total_size == 0 or self.lines_changed == 0) {
+            for (languages) |*language| {
+                language.lines_changed = 0;
+            }
+            return;
+        }
+
+        var cur_size: u64 = 0;
+        var cur_lines: u64 = 0;
+        var prev_lines: u64 = 0;
+        for (languages) |*language| {
+            cur_size += language.size;
+            cur_lines = (@as(u64, self.lines_changed) * cur_size) / total_size;
+            language.lines_changed = @intCast(cur_lines - prev_lines);
+            prev_lines = cur_lines;
+        }
+    }
 };
+
+// added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+fn getLangStatsByRepo(self: *Statistics) void {
+    for (self.repositories) |*repository| {
+        repository.getLangStatsByLineChange();
+    }
+}
 
 const Language = struct {
     name: []const u8,
     size: u32,
+    lines_changed: u32 = 0, // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
     color: ?[]const u8 = null,
 
     pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
@@ -124,6 +162,7 @@ pub fn init(
     var self: Statistics = try getRepos(allocator, &arena, client);
     errdefer self.deinit(allocator);
     try self.getLinesChanged(&arena, io, client, max_retries);
+    self.getLangStatsByRepo(); // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
     return self;
 }
 
@@ -137,7 +176,9 @@ pub fn initFromJson(allocator: std.mem.Allocator, s: []const u8) !Statistics {
         s,
         .{ .ignore_unknown_fields = true },
     );
-    return try deepcopy(allocator, parsed);
+    var self = try deepcopy(allocator, parsed);
+    self.getLangStatsByRepo(); // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+    return self;
 }
 
 pub fn deinit(self: Statistics, allocator: std.mem.Allocator) void {
@@ -264,6 +305,7 @@ fn getReposByYear(
         \\          stargazerCount
         \\          forkCount
         \\          isPrivate
+        \\          viewerPermission
         \\          languages(
         \\              first: 100,
         \\              orderBy: { direction: DESC, field: SIZE }
@@ -320,6 +362,7 @@ fn getReposByYear(
                         stargazerCount: u32,
                         forkCount: u32,
                         isPrivate: bool,
+                        viewerPermission: []const u8,
                         languages: ?struct {
                             edges: ?[]struct {
                                 size: u32,
@@ -392,7 +435,7 @@ fn getReposByYear(
             .forks = raw_repo.forkCount,
             .private = raw_repo.isPrivate,
             .languages = null,
-            .views = 0,
+            .clones = 0, // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
             .lines_changed = 0,
         };
         errdefer repository.deinit(context.allocator);
@@ -420,6 +463,7 @@ fn getReposByYear(
                     language.* = .{
                         .name = try context.allocator.dupe(u8, raw.node.name),
                         .size = raw.size,
+                        .lines_changed = 0, // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
                     };
                     errdefer context.allocator.free(language.name);
                     if (raw.node.color) |color| {
@@ -430,34 +474,36 @@ fn getReposByYear(
             }
         }
 
-        std.log.info(
-            "Getting views for {s}...",
-            .{raw_repo.nameWithOwner},
-        );
-        const response2 = try context.client.rest(
-            try std.mem.concat(
-                context.arena.allocator(),
-                u8,
-                &.{
-                    "https://api.github.com/repos/",
-                    raw_repo.nameWithOwner,
-                    "/traffic/views",
-                },
-            ),
-        );
-        defer context.client.allocator.free(response2.body);
-        if (response2.status == .ok) {
-            repository.views = (try std.json.parseFromSliceLeaky(
-                struct { count: u32 },
-                context.arena.allocator(),
-                response2.body,
-                .{ .ignore_unknown_fields = true },
-            )).count;
-        } else {
+        if (std.mem.eql(u8, raw_repo.viewerPermission, "ADMIN") or std.mem.eql(u8, raw_repo.viewerPermission, "WRITE")) {
             std.log.info(
-                "Failed to get views for {s} ({?s})",
-                .{ raw_repo.nameWithOwner, response2.status.phrase() },
+                "Getting clones for {s}...", // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                .{raw_repo.nameWithOwner},
             );
+            const response2 = try context.client.rest(
+                try std.mem.concat(
+                    context.arena.allocator(),
+                    u8,
+                    &.{
+                        "https://api.github.com/repos/",
+                        raw_repo.nameWithOwner,
+                        "/traffic/clones", // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                    },
+                ),
+            );
+            defer context.client.allocator.free(response2.body);
+            if (response2.status == .ok) {
+                repository.clones = (try std.json.parseFromSliceLeaky( // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                    struct { count: u32 },
+                    context.arena.allocator(),
+                    response2.body,
+                    .{ .ignore_unknown_fields = true },
+                )).count;
+            } else {
+                std.log.info(
+                    "Failed to get clones for {s} ({?s})", // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                    .{ raw_repo.nameWithOwner, response2.status.phrase() },
+                );
+            }
         }
 
         _ = try repository.getLinesChanged(
@@ -542,10 +588,10 @@ fn getRepos(
     }
     std.sort.pdq(Repository, result.repositories, {}, struct {
         pub fn lessThanFn(_: void, lhs: Repository, rhs: Repository) bool {
-            if (rhs.views == lhs.views) {
+            if (rhs.clones == lhs.clones) { // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
                 return rhs.stars + rhs.forks < lhs.stars + lhs.forks;
             }
-            return rhs.views < lhs.views;
+            return rhs.clones < lhs.clones; // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
         }
     }.lessThanFn);
 

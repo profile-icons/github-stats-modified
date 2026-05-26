@@ -1,3 +1,4 @@
+// modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 26/05/26.
 const std = @import("std");
 const git = @import("git.zig");
 const HttpClient = @import("http_client.zig");
@@ -14,13 +15,20 @@ review_contributions: u32 = 0,
 
 const Statistics = @This();
 
+pub const InitParams = struct {
+    max_retries: ?usize = null,
+    use_api_line_stats: bool = true,
+};
+
 const Repository = struct {
     name: []const u8,
     stars: u32,
     forks: u32,
     languages: ?[]Language,
     lines_changed: u32,
-    clones: u32, // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+    views: u32,
+    clones: u32,
+    traffic: u32,
     private: bool,
 
     pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
@@ -39,10 +47,6 @@ const Repository = struct {
         client: *HttpClient,
         user: []const u8,
     ) !std.http.Status {
-        std.log.debug(
-            "Trying to get lines of code changed for {s}...",
-            .{self.name},
-        );
         const response = try client.rest(
             try std.mem.concat(
                 arena.allocator(),
@@ -87,21 +91,11 @@ const Repository = struct {
                     self.lines_changed += week.d;
                 }
             }
-            std.log.info(
-                "Got {d} line{s} changed by {s} in {s}",
-                .{
-                    self.lines_changed,
-                    if (self.lines_changed != 1) "s" else "",
-                    user,
-                    self.name,
-                },
-            );
         }
         return response.status;
     }
 
-    // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
-    fn getLangStatsByLineChange(self: *@This()) void {
+    fn getLanguageStatsByLineChange(self: *@This()) void {
         if (self.languages == null) {
             return;
         }
@@ -114,6 +108,8 @@ const Repository = struct {
 
         if (total_size == 0 or self.lines_changed == 0) {
             for (languages) |*language| {
+                language.additions = 0;
+                language.deletions = 0;
                 language.lines_changed = 0;
             }
             return;
@@ -125,28 +121,219 @@ const Repository = struct {
         for (languages) |*language| {
             cur_size += language.size;
             cur_lines = (@as(u64, self.lines_changed) * cur_size) / total_size;
+            language.additions = 0;
+            language.deletions = 0;
             language.lines_changed = @intCast(cur_lines - prev_lines);
             prev_lines = cur_lines;
         }
     }
+
+    fn isLanguagesStats(self: @This()) bool {
+        if (self.languages) |languages| {
+            for (languages) |language| {
+                if (language.lines_changed > 0 or language.additions > 0 or language.deletions > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn repoLanguageByteShareSize(self: @This(), name: []const u8) u32 {
+        if (self.languages) |languages| {
+            for (languages) |language| {
+                if (std.mem.eql(u8, language.name, name)) {
+                    return language.size;
+                }
+            }
+        }
+        return 0;
+    }
+
+    fn repoLanguageColour(self: @This(), name: []const u8) ?[]const u8 {
+        if (self.languages) |languages| {
+            for (languages) |language| {
+                if (std.mem.eql(u8, language.name, name)) {
+                    return language.color;
+                }
+            }
+        }
+        return null;
+    }
+
+    fn freeLanguagesResource(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.languages) |languages| {
+            for (languages) |language| {
+                language.deinit(allocator);
+            }
+            allocator.free(languages);
+            self.languages = null;
+        }
+    }
+
+    fn getUserStatsFromCommitLogs(
+        self: *@This(),
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        login: []const u8,
+        token: []const u8,
+        emails: [][]const u8,
+        repo_languages: *const git.GitHubRepoLanguages,
+    ) !void {
+        const git_languages = try git.getLanguageStatsByLineChanges(
+            allocator,
+            io,
+            login,
+            token,
+            self.name,
+            emails,
+            repo_languages,
+        );
+        defer {
+            for (git_languages) |language| {
+                language.deinit(allocator);
+            }
+            allocator.free(git_languages);
+        }
+
+        var languages: std.ArrayList(Language) = .empty;
+        errdefer {
+            for (languages.items) |language| {
+                language.deinit(allocator);
+            }
+            languages.deinit(allocator);
+        }
+
+        var total_lines_changed: u64 = 0;
+        for (git_languages) |src| {
+            total_lines_changed += src.lines_changed;
+
+            const repo_language_size = self.repoLanguageByteShareSize(src.name);
+            if (repo_language_size == 0) {
+                continue;
+            }
+
+            var language = Language{
+                .name = try allocator.dupe(u8, src.name),
+                .size = repo_language_size,
+                .additions = src.additions,
+                .deletions = src.deletions,
+                .lines_changed = src.lines_changed,
+                .color = null,
+                .extensions = &.{},
+            };
+            var committed = false;
+            errdefer if (!committed) language.deinit(allocator);
+
+            language.color = if (self.repoLanguageColour(src.name)) |c|
+                try allocator.dupe(u8, c)
+            else if (src.color) |c|
+                try allocator.dupe(u8, c)
+            else
+                null;
+            language.extensions = try getFileExtensions(allocator, src.extensions);
+
+            try languages.append(allocator, language);
+            committed = true;
+        }
+
+        const languages_used = try languages.toOwnedSlice(allocator);
+        self.freeLanguagesResource(allocator);
+        self.languages = languages_used;
+        self.lines_changed = saturatingCastU32(total_lines_changed);
+    }
 };
 
-// added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
-fn getLangStatsByRepo(self: *Statistics) void {
+fn getLanguageStatsByRepo(self: *Statistics) void {
     for (self.repositories) |*repository| {
-        repository.getLangStatsByLineChange();
+        if (!repository.isLanguagesStats()) {
+            repository.getLanguageStatsByLineChange();
+        }
     }
+}
+
+fn getUserStatsFromCommitLogs(
+    self: *Statistics,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    client: *HttpClient,
+    strict: bool,
+) !void {
+    const response = try client.rest(git.gh_languages_url);
+    defer client.allocator.free(response.body);
+
+    if (response.status != .ok) {
+        std.log.info(
+            "Failed to get GitHub language metadata ({?s})",
+            .{response.status.phrase()},
+        );
+        return error.RequestFailed;
+    }
+
+    const repo_languages = try git.GitHubRepoLanguages.init(allocator, response.body);
+    defer repo_languages.deinit(allocator);
+
+    for (self.repositories) |*repository| {
+        repository.getUserStatsFromCommitLogs(
+            allocator,
+            io,
+            self.user,
+            client.token,
+            self.emails,
+            &repo_languages,
+        ) catch |e| {
+            if (strict) return e;
+            std.log.info(
+                "Falling back to API-estimated language line changes ({any})",
+                .{e},
+            );
+            repository.getLanguageStatsByLineChange();
+        };
+    }
+}
+
+fn getFileExtensions(
+    allocator: std.mem.Allocator,
+    values: []const []const u8,
+) ![][]const u8 {
+    if (values.len == 0) {
+        return &.{};
+    }
+
+    const result = try allocator.alloc([]const u8, values.len);
+    errdefer allocator.free(result);
+
+    for (values, result, 0..) |src, *dest, i| {
+        errdefer {
+            for (result[0..i]) |value| {
+                allocator.free(value);
+            }
+        }
+        dest.* = try allocator.dupe(u8, src);
+    }
+
+    return result;
 }
 
 const Language = struct {
     name: []const u8,
     size: u32,
-    lines_changed: u32 = 0, // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+    additions: u32 = 0,
+    deletions: u32 = 0,
+    lines_changed: u32 = 0,
     color: ?[]const u8 = null,
+    extensions: [][]const u8 = &.{},
 
     pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         if (self.color) |color| allocator.free(color);
+
+        for (self.extensions) |extension| {
+            allocator.free(extension);
+        }
+        if (self.extensions.len > 0) {
+            allocator.free(self.extensions);
+        }
     }
 };
 
@@ -156,14 +343,82 @@ pub fn init(
     io: std.Io,
     max_retries: ?usize,
 ) !Statistics {
+    return initWithOptionalParams(client, allocator, io, .{
+        .max_retries = max_retries,
+        .use_api_line_stats = true,
+    });
+}
+
+pub fn initWithOptionalParams(
+    client: *HttpClient,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    params: InitParams,
+) !Statistics {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     var self: Statistics = try getRepos(allocator, &arena, client);
     errdefer self.deinit(allocator);
-    try self.getLinesChanged(&arena, io, client, max_retries);
-    self.getLangStatsByRepo(); // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+
+    try self.getLineStats(
+        allocator,
+        &arena,
+        io,
+        client,
+        params.max_retries,
+        params.use_api_line_stats,
+    );
+
     return self;
+}
+
+fn getLineStats(
+    self: *Statistics,
+    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
+    io: std.Io,
+    client: *HttpClient,
+    max_retries: ?usize,
+    use_api_line_stats: bool,
+) !void {
+    if (use_api_line_stats) {
+        self.getLineStatsFromApi(arena, io, client, max_retries) catch |api_err| {
+            std.log.info(
+                "API line stats failed; falling back to commit logs ({any})",
+                .{api_err},
+            );
+            try self.getLineStatsFromCommitLogs(allocator, io, client);
+        };
+    } else {
+        self.getLineStatsFromCommitLogs(allocator, io, client) catch |git_err| {
+            std.log.info(
+                "Commit-log line stats failed; falling back to API ({any})",
+                .{git_err},
+            );
+            try self.getLineStatsFromApi(arena, io, client, max_retries);
+        };
+    }
+}
+
+fn getLineStatsFromApi(
+    self: *Statistics,
+    arena: *std.heap.ArenaAllocator,
+    io: std.Io,
+    client: *HttpClient,
+    max_retries: ?usize,
+) !void {
+    try self.getLinesChanged(arena, io, client, max_retries);
+    self.getLanguageStatsByRepo();
+}
+
+fn getLineStatsFromCommitLogs(
+    self: *Statistics,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    client: *HttpClient,
+) !void {
+    try self.getUserStatsFromCommitLogs(allocator, io, client, true);
 }
 
 pub fn initFromJson(allocator: std.mem.Allocator, s: []const u8) !Statistics {
@@ -177,7 +432,7 @@ pub fn initFromJson(allocator: std.mem.Allocator, s: []const u8) !Statistics {
         .{ .ignore_unknown_fields = true },
     );
     var self = try deepcopy(allocator, parsed);
-    self.getLangStatsByRepo(); // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+    self.getLanguageStatsByRepo();
     return self;
 }
 
@@ -194,6 +449,23 @@ pub fn deinit(self: Statistics, allocator: std.mem.Allocator) void {
     allocator.free(self.emails);
 }
 
+fn appendUniqueEmail(
+    emails: *std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
+    email: []const u8,
+) !void {
+    for (emails.items) |existing| {
+        if (std.ascii.eqlIgnoreCase(existing, email)) {
+            return;
+        }
+    }
+    try emails.append(allocator, email);
+}
+
+fn saturatingCastU32(n: u64) u32 {
+    return if (n > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(n);
+}
+
 fn getBasicInfo(client: *HttpClient, arena: *std.heap.ArenaAllocator) !struct {
     years: []u32,
     user: []const u8,
@@ -205,6 +477,7 @@ fn getBasicInfo(client: *HttpClient, arena: *std.heap.ArenaAllocator) !struct {
         \\query {
         \\  viewer {
         \\    login
+        \\    databaseId
         \\    name
         \\    contributionsCollection {
         \\      contributionYears
@@ -221,13 +494,18 @@ fn getBasicInfo(client: *HttpClient, arena: *std.heap.ArenaAllocator) !struct {
         return error.RequestFailed;
     }
     const parsed = (try std.json.parseFromSliceLeaky(
-        struct { data: struct { viewer: struct {
-            login: []const u8,
-            name: ?[]const u8,
-            contributionsCollection: struct {
-                contributionYears: []u32,
+        struct {
+            data: struct {
+                viewer: struct {
+                    login: []const u8,
+                    databaseId: ?u32,
+                    name: ?[]const u8,
+                    contributionsCollection: struct {
+                        contributionYears: []u32,
+                    },
+                },
             },
-        } } },
+        },
         arena.allocator(),
         response.body,
         .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
@@ -237,7 +515,10 @@ fn getBasicInfo(client: *HttpClient, arena: *std.heap.ArenaAllocator) !struct {
     const email_response =
         try client.rest("https://api.github.com/user/emails");
     defer client.allocator.free(email_response.body);
-    var emails: [][]const u8 = &.{};
+
+    var emails: std.ArrayList([]const u8) = .empty;
+    defer emails.deinit(arena.allocator());
+
     if (email_response.status == .ok) {
         const parsed_emails = (try std.json.parseFromSliceLeaky(
             []struct { email: []const u8 },
@@ -245,22 +526,33 @@ fn getBasicInfo(client: *HttpClient, arena: *std.heap.ArenaAllocator) !struct {
             email_response.body,
             .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
         ));
-        if (parsed_emails.len > 0) {
-            emails = try arena.allocator().alloc([]const u8, parsed_emails.len);
-            for (parsed_emails, emails) |src, *dest| {
-                dest.* = src.email;
-            }
+        for (parsed_emails) |src| {
+            try appendUniqueEmail(&emails, arena.allocator(), src.email);
         }
     } else {
         std.log.err("Failed to get user emails. " ++
             "Token may be missing `user:email` permission.", .{});
     }
-    if (emails.len == 0) {
-        emails = try arena.allocator().alloc([]const u8, 1);
-        emails[0] = try std.fmt.allocPrint(
+
+    try appendUniqueEmail(
+        &emails,
+        arena.allocator(),
+        try std.fmt.allocPrint(
             arena.allocator(),
             "{s}@users.noreply.github.com",
             .{parsed.login},
+        ),
+    );
+
+    if (parsed.databaseId) |database_id| {
+        try appendUniqueEmail(
+            &emails,
+            arena.allocator(),
+            try std.fmt.allocPrint(
+                arena.allocator(),
+                "{d}+{s}@users.noreply.github.com",
+                .{ database_id, parsed.login },
+            ),
         );
     }
 
@@ -268,8 +560,12 @@ fn getBasicInfo(client: *HttpClient, arena: *std.heap.ArenaAllocator) !struct {
         .years = parsed.contributionsCollection.contributionYears,
         .user = parsed.login,
         .name = parsed.name,
-        .emails = emails,
+        .emails = try emails.toOwnedSlice(arena.allocator()),
     };
+}
+
+fn isRepoPushAccess(permission: []const u8) bool {
+    return std.mem.eql(u8, permission, "WRITE") or std.mem.eql(u8, permission, "MAINTAIN") or std.mem.eql(u8, permission, "ADMIN");
 }
 
 fn getReposByYear(
@@ -435,7 +731,9 @@ fn getReposByYear(
             .forks = raw_repo.forkCount,
             .private = raw_repo.isPrivate,
             .languages = null,
-            .clones = 0, // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+            .views = 0,
+            .clones = 0,
+            .traffic = 0,
             .lines_changed = 0,
         };
         errdefer repository.deinit(context.allocator);
@@ -456,14 +754,16 @@ fn getReposByYear(
                 ) |raw, *language, i| {
                     errdefer {
                         for (0..i, repository.languages.?) |_, l| {
-                            context.allocator.free(l.name);
-                            if (l.color) |c| context.allocator.free(c);
+                            l.deinit(context.allocator);
                         }
                     }
                     language.* = .{
                         .name = try context.allocator.dupe(u8, raw.node.name),
                         .size = raw.size,
-                        .lines_changed = 0, // added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                        .additions = 0,
+                        .deletions = 0,
+                        .lines_changed = 0,
+                        .extensions = &.{},
                     };
                     errdefer context.allocator.free(language.name);
                     if (raw.node.color) |color| {
@@ -474,9 +774,9 @@ fn getReposByYear(
             }
         }
 
-        if (std.mem.eql(u8, raw_repo.viewerPermission, "ADMIN") or std.mem.eql(u8, raw_repo.viewerPermission, "WRITE")) {
+        if (isRepoPushAccess(raw_repo.viewerPermission)) {
             std.log.info(
-                "Getting clones for {s}...", // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                "Getting views for {s}...",
                 .{raw_repo.nameWithOwner},
             );
             const response2 = try context.client.rest(
@@ -486,13 +786,13 @@ fn getReposByYear(
                     &.{
                         "https://api.github.com/repos/",
                         raw_repo.nameWithOwner,
-                        "/traffic/clones", // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                        "/traffic/views",
                     },
                 ),
             );
             defer context.client.allocator.free(response2.body);
             if (response2.status == .ok) {
-                repository.clones = (try std.json.parseFromSliceLeaky( // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                repository.views = (try std.json.parseFromSliceLeaky(
                     struct { count: u32 },
                     context.arena.allocator(),
                     response2.body,
@@ -500,17 +800,45 @@ fn getReposByYear(
                 )).count;
             } else {
                 std.log.info(
-                    "Failed to get clones for {s} ({?s})", // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+                    "Failed to get views for {s} ({?s})",
                     .{ raw_repo.nameWithOwner, response2.status.phrase() },
                 );
             }
         }
 
-        _ = try repository.getLinesChanged(
-            context.arena,
-            context.client,
-            context.user,
-        );
+        if (isRepoPushAccess(raw_repo.viewerPermission)) {
+            std.log.info(
+                "Getting clones for {s}...",
+                .{raw_repo.nameWithOwner},
+            );
+            const response2 = try context.client.rest(
+                try std.mem.concat(
+                    context.arena.allocator(),
+                    u8,
+                    &.{
+                        "https://api.github.com/repos/",
+                        raw_repo.nameWithOwner,
+                        "/traffic/clones",
+                    },
+                ),
+            );
+            defer context.client.allocator.free(response2.body);
+            if (response2.status == .ok) {
+                repository.clones = (try std.json.parseFromSliceLeaky(
+                    struct { count: u32 },
+                    context.arena.allocator(),
+                    response2.body,
+                    .{ .ignore_unknown_fields = true },
+                )).count;
+            } else {
+                std.log.info(
+                    "Failed to get clones for {s} ({?s})",
+                    .{ raw_repo.nameWithOwner, response2.status.phrase() },
+                );
+            }
+        }
+
+        repository.traffic = repository.views + repository.clones;
 
         try context.seen.put(raw_repo.nameWithOwner, true);
         try context.repositories.append(context.allocator, repository);
@@ -588,10 +916,10 @@ fn getRepos(
     }
     std.sort.pdq(Repository, result.repositories, {}, struct {
         pub fn lessThanFn(_: void, lhs: Repository, rhs: Repository) bool {
-            if (rhs.clones == lhs.clones) { // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+            if (rhs.traffic == lhs.traffic) {
                 return rhs.stars + rhs.forks < lhs.stars + lhs.forks;
             }
-            return rhs.clones < lhs.clones; // modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+            return rhs.traffic < lhs.traffic;
         }
     }.lessThanFn);
 

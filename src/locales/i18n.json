@@ -1,0 +1,26 @@
+{
+  "en": {
+    "github_statistics_str": "GitHub Statistics for",
+    "stars_str": "Stars",
+    "forks_str": "Forks",
+    "all_time_contributions_str": "All-time contributions",
+    "lines_of_code_changed_str": "Lines of code changed",
+    "repo_traffic_str": "Repo traffic (past 2 weeks)",
+    "repos_with_contributions_str": "Repos with contributions",
+    "programming_languages_str": "Languages",
+    "by_line_changes_str": "by Line Changes",
+    "estimated_str": "Estimated"
+  },
+  "sv": {
+    "github_statistics_str": "GitHub Statistik för",
+    "stars_str": "Stjärnor",
+    "forks_str": "Gafflar",
+    "all_time_contributions_str": "Bidrag genom tiderna",
+    "lines_of_code_changed_str": "Ändrade kodrader",
+    "repo_traffic_str": "Repo trafik (senaste 2 veckorna)",
+    "repos_with_contributions_str": "Repositorier med bidrag",
+    "programming_languages_str": "Programmeringsspråk",
+    "by_line_changes_str": "av Linjebyten",
+    "estimated_str": "Beräknad"
+  }
+}

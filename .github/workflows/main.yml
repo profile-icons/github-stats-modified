@@ -1,16 +1,16 @@
+# modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 26/05/26; refer: https://github.com/profile-icons/git-stats-old
 name: Generate Stats Images
 
 on:
   push:
     branches: 
       - main
-    # added by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
     paths:
       - "src/**"
       - ".github/workflows/**"
       - "build.zig*"
   schedule:
-    - cron: "0 0 * * 4"  # modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26.
+    - cron: "0 0 * * 4"
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29  # v2 tag
+    - uses: mlugg/setup-zig@v2
       with:
         version: 0.16.0
 
@@ -36,7 +36,6 @@ jobs:
 
     - name: Checkout history branch
       run: |
-        # modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 24/05/26; refer: https://github.com/profile-icons/git-stats-old
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         # Push generated files to the generated branch
@@ -50,6 +49,7 @@ jobs:
         ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         EXCLUDE_REPOS: ${{ secrets.EXCLUDE_REPOS }}
         EXCLUDE_LANGS: ${{ secrets.EXCLUDE_LANGS }}
+        IS_LOCAL: ${{ secrets.IS_LOCAL }}
         EXCLUDE_PRIVATE: "false"
         SILENT: "true"
         # TODO: Remove this when they get their API working again

@@ -1,7 +1,7 @@
 # [GitHub Stats Visualization](https://github.com/jstrieb/github-stats)
 
-![](https://raw.githubusercontent.com/profile-icons/git-stats/refs/heads/generated/overview.svg)
-![](https://raw.githubusercontent.com/profile-icons/git-stats/refs/heads/generated/languages.svg)
+![](https://raw.githubusercontent.com/profile-icons/github-stats-modified/refs/heads/generated/overview.svg)
+![](https://raw.githubusercontent.com/profile-icons/github-stats-modified/refs/heads/generated/languages.svg)
 
 Generate visualizations of GitHub user and repository statistics with GitHub
 Actions. Visualizations can include data from private repositories, and from
@@ -11,7 +11,7 @@ repositories you have contributed to, but do not own.
 
 * optionally visualize language stats by line changes
    * backup: line changes weighted by repo language byte share estimation
-* support portable dark-mode and [i18n](https://github.com/profile-icons/git-stats/issues/1)
+* support portable dark-mode and [i18n](https://github.com/profile-icons/github-stats-modified/issues/1)
 * widen `languages.svg` to use excess `README.md` space and list more language stats
 * display all traffic (views + clones) stats
 * update once weekly
@@ -163,8 +163,8 @@ and retrieve the images.
    following lines of code into your markdown content.
    - Replace `[USERNAME]` in the links below with your own username.
    ``` markdown
-   ![](https://raw.githubusercontent.com/[USERNAME]/git-stats/refs/heads/generated/overview.svg)
-   ![](https://raw.githubusercontent.com/[USERNAME]/git-stats/refs/heads/generated/languages.svg)
+   ![](https://raw.githubusercontent.com/[USERNAME]/github-stats-modified/refs/heads/generated/overview.svg)
+   ![](https://raw.githubusercontent.com/[USERNAME]/github-stats-modified/refs/heads/generated/languages.svg)
    [Modification of `jstrieb/github-stats`.](https://github.com/jstrieb/github-stats)
    ```
 1. Star this repo if you like it!

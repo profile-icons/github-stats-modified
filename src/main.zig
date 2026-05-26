@@ -1,4 +1,4 @@
-// modified by Adam Ross (https://www.github.com/profile-icons/git-stats); 26/05/26.
+// modified by Adam Ross (https://www.github.com/profile-icons/github-stats-modified), 26/05/26.
 const builtin = @import("builtin");
 const std = @import("std");
 const version = @import("options").version;
